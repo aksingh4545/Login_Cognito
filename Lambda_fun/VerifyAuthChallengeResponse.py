@@ -12,30 +12,34 @@ def lambda_handler(event, context):
 
     item = table.get_item(Key={"email": email}).get("Item")
 
-    # No record → fail
     if not item:
+        event["response"]["answerCorrect"] = False
+        return event
+
+    # ⛔ Locked user
+    if item.get("locked_until", 0) > now:
         event["response"]["answerCorrect"] = False
         return event
 
     # ✅ Correct OTP
     if user_otp == expected_otp:
-        # cleanup on success
-        table.delete_item(Key={"email": email})
+        table.update_item(
+            Key={"email": email},
+            UpdateExpression="SET attempts = :z",
+            ExpressionAttributeValues={":z": 0}
+        )
         event["response"]["answerCorrect"] = True
         return event
 
     # ❌ Wrong OTP
     attempts = item.get("attempts", 0) + 1
 
-    update_expr = "SET attempts=:a, last_attempt_time=:t"
-    values = {
-        ":a": attempts,
-        ":t": now
-    }
+    update_expr = "SET attempts=:a"
+    values = {":a": attempts}
 
     if attempts >= 6:
         update_expr += ", locked_until=:l"
-        values[":l"] = now + 900
+        values[":l"] = now + 900  # 15 minutes
 
     table.update_item(
         Key={"email": email},
@@ -43,6 +47,6 @@ def lambda_handler(event, context):
         ExpressionAttributeValues=values
     )
 
-    # ❌ THIS MUST BE FALSE
     event["response"]["answerCorrect"] = False
     return event
+

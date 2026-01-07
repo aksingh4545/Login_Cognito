@@ -9,41 +9,45 @@ table = dynamodb.Table("otp_login_attempts")
 def lambda_handler(event, context):
     email = event["request"]["userAttributes"]["email"]
     now = int(time.time())
+    session = event["request"]["session"]
 
-    # Get existing record
-    response = table.get_item(Key={"email": email})
-    item = response.get("Item")
+    # Fetch existing record
+    item = table.get_item(Key={"email": email}).get("Item")
 
-    # Block if still locked
+    # ⛔ Check lock
     if item and item.get("locked_until", 0) > now:
         raise Exception("Account locked. Try again after 15 minutes.")
 
-    # ALWAYS generate a fresh OTP on Send OTP
-    otp = str(random.randint(100000, 999999))
+    # 🔁 RETRY FLOW → reuse OTP, DO NOT send email
+    if session and len(session) > 0:
+        otp = item["otp"]
 
-    table.put_item(
-        Item={
-            "email": email,
-            "otp": otp,
-            "attempts": 0,
-            "last_attempt_time": now,
-            "locked_until": 0
-        }
-    )
+    # 🆕 FIRST REQUEST → generate + send OTP
+    else:
+        otp = str(random.randint(100000, 999999))
 
-    # Send email every time OTP is generated
-    ses.send_email(
-        Source="aksingh4539047@gmail.com",
-        Destination={"ToAddresses": [email]},
-        Message={
-            "Subject": {"Data": "Your OTP"},
-            "Body": {
-                "Text": {"Data": f"Your OTP is {otp}. Valid for 15 minutes."}
+        table.put_item(
+            Item={
+                "email": email,
+                "otp": otp,
+                "attempts": 0,
+                "otp_created_at": now,
+                "locked_until": 0
             }
-        }
-    )
+        )
 
-    print("OTP SENT TO:", email)
+        ses.send_email(
+            Source="aksingh4539047@gmail.com",
+            Destination={"ToAddresses": [email]},
+            Message={
+                "Subject": {"Data": "Your OTP"},
+                "Body": {
+                    "Text": {"Data": f"Your OTP is {otp}. Valid for 15 minutes."}
+                }
+            }
+        )
+
+        print("OTP email sent")
 
     event["response"]["privateChallengeParameters"] = {"otp": otp}
     event["response"]["challengeMetadata"] = "OTP_CHALLENGE"

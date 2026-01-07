@@ -3,14 +3,22 @@ import boto3
 import hmac
 import hashlib
 import base64
+import time
 
+# ---------------- CONFIG ----------------
 REGION = "ap-south-1"
 USER_POOL_ID = "ap-south-1_Vu2fj6EP8"
 CLIENT_ID = "7vgo6qhl7ibe25k5ihln621b48"
 CLIENT_SECRET = "1amkp4dtgr0l1rppuvhivlf1aqc9k03c03onbtp1mi78gtqlnhkt"
 
-client = boto3.client("cognito-idp", region_name=REGION)
+MAX_ATTEMPTS = 6
 
+# ---------------- AWS CLIENTS ----------------
+client = boto3.client("cognito-idp", region_name=REGION)
+dynamodb = boto3.resource("dynamodb", region_name=REGION)
+table = dynamodb.Table("otp_login_attempts")
+
+# ---------------- HELPERS ----------------
 def get_secret_hash(username):
     msg = username + CLIENT_ID
     dig = hmac.new(
@@ -19,6 +27,7 @@ def get_secret_hash(username):
         hashlib.sha256
     ).digest()
     return base64.b64encode(dig).decode("utf-8")
+
 
 def ensure_user_exists(email):
     try:
@@ -37,17 +46,38 @@ def ensure_user_exists(email):
             MessageAction="SUPPRESS"
         )
 
+
+def get_attempts_left(email):
+    try:
+        item = table.get_item(Key={"email": email}).get("Item")
+        if not item:
+            return MAX_ATTEMPTS
+
+        now = int(time.time())
+        locked_until = item.get("locked_until", 0)
+
+        if locked_until > now:
+            remaining = (locked_until - now) // 60
+            return f"LOCKED:{remaining}"
+
+        attempts = item.get("attempts", 0)
+        return max(0, MAX_ATTEMPTS - attempts)
+    except Exception:
+        return None
+
+
+# ---------------- UI ----------------
 st.title("Email OTP Login")
 
 email = st.text_input("Email").strip().lower()
 
-# ---------- SEND OTP ----------
+# ---------------- SEND OTP ----------------
 if st.button("Send OTP"):
     if "@" not in email:
         st.error("Please enter a valid email address")
     else:
         try:
-            # 🔑 IMPORTANT: clear any old session
+            # clear any previous session
             st.session_state.pop("session", None)
 
             ensure_user_exists(email)
@@ -61,7 +91,6 @@ if st.button("Send OTP"):
                 ClientId=CLIENT_ID
             )
 
-            # store fresh session only
             st.session_state["session"] = response["Session"]
             st.session_state["email"] = email
 
@@ -72,7 +101,7 @@ if st.button("Send OTP"):
 
 otp = st.text_input("Enter OTP")
 
-# ---------- VERIFY OTP ----------
+# ---------------- VERIFY OTP ----------------
 if st.button("Verify OTP"):
     if "session" not in st.session_state:
         st.error("Session expired. Please request OTP again.")
@@ -89,14 +118,21 @@ if st.button("Verify OTP"):
                 }
             )
 
-            # ✅ ONLY success if tokens exist
+            # ✅ Successful login
             if "AuthenticationResult" in response:
                 st.session_state.pop("session", None)
                 st.success("Login successful")
+
             else:
-                # ❌ Wrong OTP
                 st.session_state["session"] = response.get("Session")
-                st.error("Invalid OTP. Please try again.")
+
+                attempts_left = get_attempts_left(st.session_state["email"])
+
+                if isinstance(attempts_left, str) and attempts_left.startswith("LOCKED"):
+                    minutes = attempts_left.split(":")[1]
+                    st.error(f"Too many attempts. Try again after {minutes} minutes.")
+                else:
+                    st.error(f"Invalid OTP. Attempts left: {attempts_left}")
 
         except Exception as e:
             st.error(str(e))
