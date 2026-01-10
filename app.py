@@ -7,9 +7,8 @@ import time
 
 # ---------------- CONFIG ----------------
 REGION = "ap-south-1"
-USER_POOL_ID = "ap-south-1_Vu2fj6EP8"
-CLIENT_ID = "7vgo6qhl7ibe25k5ihln621b48"
-CLIENT_SECRET = "1amkp4dtgr0l1rppuvhivlf1aqc9k03c03onbtp1mi78gtqlnhkt"
+USER_POOL_ID = ""
+CLIENT_ID = ""
 
 MAX_ATTEMPTS = 6
 
